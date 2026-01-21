@@ -13,6 +13,7 @@ interface Player {
 
 interface PlaygroundProps {
     token: string;
+    spaceId: string;
     onLogout: () => void;
 }
 
@@ -23,7 +24,7 @@ interface PlaygroundProps {
  * 2. Canvas rendering (2D Grid & Players).
  * 3. Keyboard input for movement.
  */
-export const Playground: React.FC<PlaygroundProps> = ({ token, onLogout }) => {
+export const Playground: React.FC<PlaygroundProps> = ({ token, spaceId, onLogout }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [socket, setSocket] = useState<Socket | null>(null);
     const [players, setPlayers] = useState<Player[]>([]);
@@ -40,7 +41,7 @@ export const Playground: React.FC<PlaygroundProps> = ({ token, onLogout }) => {
 
         newSocket.on('connect', () => {
             console.log('Connected to socket');
-            newSocket.emit('join_room', 'room-1');
+            newSocket.emit('join_room', spaceId);
         });
 
         newSocket.on('connect_error', (err) => {
@@ -150,7 +151,7 @@ export const Playground: React.FC<PlaygroundProps> = ({ token, onLogout }) => {
             if (e.key === 'd' || e.key === 'ArrowRight') x += speed;
 
             // Send 'move' event to server. The server will update state and broadcast it back.
-            socket.emit('move', { x, y, roomId: 'room-1' });
+            socket.emit('move', { x, y, roomId: spaceId });
         };
 
         window.addEventListener('keydown', handleKeyDown);
