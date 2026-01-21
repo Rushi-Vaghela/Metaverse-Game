@@ -1,6 +1,6 @@
 # Metaverse Arena (2D)
 
-A real-time 2D multiplayer metaverse where players can join a shared space, move around, and see others in real-time. Built with a Monorepo structure using Turborepo.
+A real-time 2D multiplayer metaverse where players can join shared spaces, move around, and chat in real-time. Built with a Monorepo structure using Turborepo.
 
 ## Tech Stack
 
@@ -9,6 +9,19 @@ A real-time 2D multiplayer metaverse where players can join a shared space, move
 -   **Backend**: Node.js, Express, Socket.IO (Port 3002)
 -   **Database**: PostgreSQL, Prisma ORM
 -   **Authentication**: JWT, bcryptjs
+
+## Key Features
+
+1.  **Authentication**: Secure Sign Up/Sign In with JWT.
+2.  **Spaces**: 
+    -   Admins can create multiple independent spaces (rooms).
+    -   Users can select a space to join.
+    -   Players in different spaces are completely isolated.
+3.  **Real-Time Movement**: Multiplayer movement synchronization.
+4.  **In-Game Chat**: 
+    -   Real-time messaging side-panel.
+    -   Chat is scoped to the current space.
+    -   Movement keys (WASD) are disabled while typing.
 
 ## Prerequisites
 
@@ -72,20 +85,18 @@ npm run dev
 ## Project Structure
 
 -   `apps/web`: React Frontend application.
-    -   `src/components/Playground.tsx`: Main game canvas and socket logic.
-    -   `src/App.tsx`: Authentication routing.
+    -   `src/components/Playground.tsx`: Main game canvas, chat UI, and socket logic.
+    -   `src/components/SpaceSelector.tsx`: Dashboard for selecting/creating spaces.
+    -   `src/App.tsx`: Authentication and Routing logic.
 -   `apps/server`: Express + Socket.IO Backend.
-    -   `src/index.ts`: Entry point, Auth endpoints, and Game Loop.
+    -   `src/index.ts`: Entry point, Auth endpoints (`/signup`, `/signin`), Spaces API (`/spaces`), and Socket.IO Events (`move`, `chat_message`).
 -   `packages/db`: Shared Database module (Prisma).
 
 ## How it Works
 
-1.  **Auth**: Users Sign Up/In. A JWT token is issued and stored in `localStorage`.
-2.  **Socket**: The Frontend connects to the Backend Socket.IO server, passing the JWT in the handshake for authentication.
-3.  **State**: The server maintains a list of users in `rooms`.
-4.  **Movement**: 
-    -   User presses keys (WASD).
-    -   `move` event sent to server.
-    -   Server updates player coordinates.
-    -   Server ticks every 50ms and broadcasts `players_update`.
-    -   Frontend redraws the canvas.
+1.  **Auth**: User logs in -> JWT issued -> Stored in LocalStorage.
+2.  **Selection**: User selects a **Space** from the dashboard.
+3.  **Connection**: Frontend connects to Socket.IO, sending the JWT and SpaceID.
+4.  **Interaction**:
+    -   **Move**: WASD keys send `move` events. Server broadcasts updates @ 20Hz.
+    -   **Chat**: Messages sent via `chat_message` event. Server broadcasts to room.
