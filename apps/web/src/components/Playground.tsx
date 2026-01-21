@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, FormEvent } from 'react';
 import { io, Socket } from 'socket.io-client';
 
 // Backend URL - ensures we connect to the correct server port
@@ -9,6 +9,13 @@ interface Player {
     username: string;
     x: number;
     y: number;
+}
+
+interface Message {
+    senderId: string;
+    username: string;
+    message: string;
+    timestamp: string;
 }
 
 interface PlaygroundProps {
@@ -22,13 +29,20 @@ interface PlaygroundProps {
  * The main game area. Handles:
  * 1. Socket.IO connection with Auth.
  * 2. Canvas rendering (2D Grid & Players).
- * 3. Keyboard input for movement.
+ * 3. Chat System (Right Sidebar).
+ * 4. Keyboard input for movement.
  */
 export const Playground: React.FC<PlaygroundProps> = ({ token, spaceId, onLogout }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+
     const [socket, setSocket] = useState<Socket | null>(null);
     const [players, setPlayers] = useState<Player[]>([]);
     const [me, setMe] = useState<Player | null>(null);
+
+    // Chat State
+    const [messages, setMessages] = useState<Message[]>([]);
+    const [newMessage, setNewMessage] = useState('');
 
     // ------------------------------------------------------------------
     // 1. Connection & Events
@@ -53,13 +67,23 @@ export const Playground: React.FC<PlaygroundProps> = ({ token, spaceId, onLogout
             setPlayers(updatedPlayers);
         });
 
+        // Receive Chat Messages
+        newSocket.on('chat_message', (msg: Message) => {
+            setMessages(prev => [...prev, msg]);
+        });
+
         setSocket(newSocket);
 
         // Cleanup on unmount
         return () => {
             newSocket.disconnect();
         };
-    }, [token]);
+    }, [token, spaceId]); // Re-connect if space changes
+
+    // Auto-scroll chat
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
 
     // ------------------------------------------------------------------
     // 2. Identify "Myself"
@@ -67,11 +91,9 @@ export const Playground: React.FC<PlaygroundProps> = ({ token, spaceId, onLogout
     useEffect(() => {
         if (!token) return;
         try {
-            // Decode JWT payload (middle part of token) to get our userId
             const payload = JSON.parse(atob(token.split('.')[1]));
             const myUserId = payload.userId;
 
-            // Find our player object in the state based on ID
             const myPlayer = players.find(p => p.id === myUserId);
             if (myPlayer) setMe(myPlayer);
         } catch (e) {
@@ -88,9 +110,7 @@ export const Playground: React.FC<PlaygroundProps> = ({ token, spaceId, onLogout
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        // Render Function - runs on every animation frame
         const draw = () => {
-            // Clear screen
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             // Draw Background Grid
@@ -114,12 +134,10 @@ export const Playground: React.FC<PlaygroundProps> = ({ token, spaceId, onLogout
                 const isMe = me?.id === p.id;
                 ctx.fillStyle = isMe ? '#4f46e5' : '#10b981'; // Blue for me, Green for others
 
-                // Draw Body (Circle)
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, 20, 0, Math.PI * 2);
                 ctx.fill();
 
-                // Draw Username
                 ctx.fillStyle = 'white';
                 ctx.font = '12px Arial';
                 ctx.textAlign = 'center';
@@ -134,46 +152,111 @@ export const Playground: React.FC<PlaygroundProps> = ({ token, spaceId, onLogout
     }, [players, me]);
 
     // ------------------------------------------------------------------
-    // 4. Input Handling
+    // 4. Input Handling (Movement)
     // ------------------------------------------------------------------
     useEffect(() => {
         if (!socket || !me) return;
 
         const handleKeyDown = (e: KeyboardEvent) => {
+            // Ignore movement keys if user is typing in an input field
+            const target = e.target as HTMLElement;
+            if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
             const speed = 10;
             let { x, y } = me;
 
-            // Calculate new position
-            // NOTE: In a real game, you would check collisions here before sending
             if (e.key === 'w' || e.key === 'ArrowUp') y -= speed;
             if (e.key === 's' || e.key === 'ArrowDown') y += speed;
             if (e.key === 'a' || e.key === 'ArrowLeft') x -= speed;
             if (e.key === 'd' || e.key === 'ArrowRight') x += speed;
 
-            // Send 'move' event to server. The server will update state and broadcast it back.
             socket.emit('move', { x, y, roomId: spaceId });
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [socket, me]);
+    }, [socket, me, spaceId]);
+
+    // ------------------------------------------------------------------
+    // 5. Chat Handlers
+    // ------------------------------------------------------------------
+    const handleSendMessage = (e: FormEvent) => {
+        e.preventDefault();
+        if (!newMessage.trim() || !socket) return;
+
+        socket.emit('chat_message', {
+            message: newMessage,
+            roomId: spaceId
+        });
+        setNewMessage('');
+    };
 
     return (
-        <div className="flex flex-col items-center justify-center h-screen bg-black relative">
-            <button
-                onClick={onLogout}
-                className="absolute top-4 right-4 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-bold"
-            >
-                Logout
-            </button>
-            <canvas
-                ref={canvasRef}
-                width={800}
-                height={600}
-                className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl"
-            />
-            <div className="mt-4 text-gray-500">
-                Use W, A, S, D to move
+        <div className="flex h-screen bg-black overflow-hidden">
+            {/* LEFT: Game Area */}
+            <div className="flex-1 relative flex items-center justify-center bg-gray-900">
+                <button
+                    onClick={onLogout}
+                    className="absolute top-4 left-4 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-bold z-10"
+                >
+                    Logout
+                </button>
+
+                <canvas
+                    ref={canvasRef}
+                    width={800}
+                    height={600}
+                    className="bg-black border border-gray-700 rounded-lg shadow-xl"
+                />
+
+                <div className="absolute bottom-4 left-4 text-gray-500 pointer-events-none">
+                    Use W, A, S, D to move
+                </div>
+            </div>
+
+            {/* RIGHT: Chat Sidebar */}
+            <div className="w-96 bg-gray-900 border-l border-gray-800 flex flex-col">
+                <div className="p-4 border-b border-gray-800 bg-gray-800">
+                    <h2 className="text-xl font-bold text-white">Space Chat</h2>
+                    <div className="text-sm text-gray-400">Connected: {players.length}</div>
+                </div>
+
+                {/* Messages List */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    {messages.map((msg, idx) => {
+                        const isMe = msg.username === me?.username;
+                        return (
+                            <div key={idx} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                                <div className="text-xs text-gray-400 mb-1">{msg.username}</div>
+                                <div className={`px-3 py-2 rounded-lg max-w-[85%] break-words ${isMe ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-200'
+                                    }`}>
+                                    {msg.message}
+                                </div>
+                            </div>
+                        );
+                    })}
+                    <div ref={messagesEndRef} />
+                </div>
+
+                {/* Input Area */}
+                <form onSubmit={handleSendMessage} className="p-4 border-t border-gray-800 bg-gray-800">
+                    <div className="flex gap-2">
+                        <input
+                            type="text"
+                            value={newMessage}
+                            onChange={(e) => setNewMessage(e.target.value)}
+                            placeholder="Type a message..."
+                            className="flex-1 bg-gray-900 border border-gray-700 text-white rounded px-3 py-2 focus:outline-none focus:border-blue-500"
+                        />
+                        <button
+                            type="submit"
+                            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-semibold transition-colors disabled:opacity-50"
+                            disabled={!newMessage.trim()}
+                        >
+                            Send
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
     );
