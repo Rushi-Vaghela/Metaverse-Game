@@ -220,6 +220,23 @@ io.on("connection", (socket) => {
     });
 
     /**
+     * CHAT MESSAGE
+     * Broadcasts a message to everyone in the room.
+     */
+    socket.on("chat_message", (data: { message: string, roomId: string }) => {
+        const room = rooms.get(data.roomId);
+        if (!room) return;
+
+        // Broadcast to room
+        io.to(data.roomId).emit("chat_message", {
+            senderId: user.userId,
+            username: user.username,
+            message: data.message,
+            timestamp: new Date().toISOString()
+        });
+    });
+
+    /**
      * DISCONNECT
      * Cleanup player data when they leave.
      */
