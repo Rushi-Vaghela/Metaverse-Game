@@ -35,8 +35,15 @@ app.post("/api/signup", async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Create user in Postgres via Prisma
+        // For testing purposes, if username is 'admin', give them Admin role
+        const role = username === 'admin' ? 'Admin' : 'User';
+
         const user = await client.user.create({
-            data: { username, password: hashedPassword }
+            data: {
+                username,
+                password: hashedPassword,
+                role
+            }
         });
 
         res.json({ userId: user.id });
@@ -62,12 +69,69 @@ app.post("/api/signin", async (req, res) => {
         const valid = await bcrypt.compare(password, user.password);
         if (!valid) return res.status(400).json({ error: "Invalid password" });
 
-        // Generate JWT Token containing UserId and Username
-        const token = jwt.sign({ userId: user.id, username: user.username }, JWT_SECRET);
+        // Generate JWT Token containing UserId, Username, AND Role
+        const token = jwt.sign({
+            userId: user.id,
+            username: user.username,
+            role: user.role
+        }, JWT_SECRET);
+
         res.json({ token });
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+// ----------------------------------------------------------------------
+// Space Management Endpoints
+// ----------------------------------------------------------------------
+
+/**
+ * GET SPACES
+ * Returns list of all available spaces.
+ */
+app.get("/api/spaces", async (req, res) => {
+    try {
+        const spaces = await client.space.findMany();
+        res.json(spaces);
+    } catch (e) {
+        res.status(500).json({ error: "Failed to fetch spaces" });
+    }
+});
+
+/**
+ * CREATE SPACE
+ * Allows Admin to create a new space.
+ * Checks JWT token from Authorization header.
+ */
+app.post("/api/spaces", async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader) return res.status(401).json({ error: "Unauthorized" });
+
+        const token = authHeader.split(" ")[1];
+        const decoded = jwt.verify(token, JWT_SECRET) as any;
+
+        if (decoded.role !== 'Admin') {
+            return res.status(403).json({ error: "Only admins can create spaces" });
+        }
+
+        const { name, width, height } = req.body;
+        if (!name) return res.status(400).json({ error: "Space name is required" });
+
+        const space = await client.space.create({
+            data: {
+                name,
+                width: width || 800,
+                height: height || 600
+            }
+        });
+
+        res.json(space);
+    } catch (e) {
+        console.error(e);
+        res.status(400).json({ error: "Error creating space" });
     }
 });
 
@@ -115,9 +179,12 @@ io.on("connection", (socket) => {
 
     /**
      * JOIN ROOM
-     * Adds the authenticated user to a specific room and initializes their position.
+     * Adds the authenticated user to a specific room (Space) and initializes their position.
      */
     socket.on("join_room", (roomId: string) => {
+        // Verify room (space) exists? 
+        // For strictness we could query DB, but for now we trust client to send valid SpaceID
+        // or we check if room map exists or create it.
         socket.join(roomId);
 
         if (!rooms.has(roomId)) {
