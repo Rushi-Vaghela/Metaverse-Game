@@ -1,0 +1,42 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id       String  @id @default(uuid())
+  username String  @unique
+  password String
+  avatarId String?
+  role     Role    @default(User)
+}
+
+model Space {
+  id       String    @id @default(uuid())
+  name     String    @unique
+  width    Int
+  height   Int
+  thumbnail String?
+  elements Element[]
+}
+
+model Element {
+  id        String @id @default(uuid())
+  width     Int
+  height    Int
+  imageUrl  String
+  static    Boolean
+  x         Int
+  y         Int
+  spaceId   String
+  space     Space   @relation(fields: [spaceId], references: [id])
+}
+
+enum Role {
+    Admin
+    User
+}
