@@ -22,6 +22,10 @@ A real-time 2D multiplayer metaverse where players can join shared spaces, move 
     -   Real-time messaging side-panel.
     -   Chat is scoped to the current space.
     -   Movement keys (WASD) are disabled while typing.
+5.  **Reinforcement Learning Simulator (AI Sandbox)**:
+    -   Spawn AI bots that learn to navigate the Metaverse using Q-Learning.
+    -   Set custom target destinations via the UI and watch the training process live.
+    -   Adjust RL hyperparameters (Learning Rate, Discount Factor) in real-time.
 
 ## Prerequisites
 
@@ -100,3 +104,6 @@ npm run dev
 4.  **Interaction**:
     -   **Move**: WASD keys send `move` events. Server broadcasts updates @ 20Hz.
     -   **Chat**: Messages sent via `chat_message` event. Server broadcasts to room.
+5.  **AI Simulation**:
+    -   **Target Setting**: User clicks a point on the canvas, triggering `set_rl_target`.
+    -   **Training**: Node.js backend calculates agent movements via the `QAgent` engine, sending backend-generated `move` broadcasts for the bot just like a human player.

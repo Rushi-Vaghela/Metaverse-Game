@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState, FormEvent } from 'react';
+import React, { useEffect, useRef, useState, FormEvent, MouseEvent } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { RLControlPanel } from './RLControlPanel';
 
 // Backend URL - ensures we connect to the correct server port
 const SOCKET_URL = 'http://localhost:3002';
@@ -18,6 +19,14 @@ interface Message {
     timestamp: string;
 }
 
+interface RLStats {
+    episode: number;
+    totalReward: number;
+    epsilon: number;
+    learningRate: number;
+    discountFactor: number;
+}
+
 interface PlaygroundProps {
     token: string;
     spaceId: string;
@@ -30,7 +39,8 @@ interface PlaygroundProps {
  * 1. Socket.IO connection with Auth.
  * 2. Canvas rendering (2D Grid & Players).
  * 3. Chat System (Right Sidebar).
- * 4. Keyboard input for movement.
+ * 4. RL Dashboard (Left Sidebar).
+ * 5. Keyboard input for movement.
  */
 export const Playground: React.FC<PlaygroundProps> = ({ token, spaceId, onLogout }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -43,6 +53,11 @@ export const Playground: React.FC<PlaygroundProps> = ({ token, spaceId, onLogout
     // Chat State
     const [messages, setMessages] = useState<Message[]>([]);
     const [newMessage, setNewMessage] = useState('');
+
+    // RL State
+    const [isTargetMode, setIsTargetMode] = useState(false);
+    const [rlStats, setRlStats] = useState<RLStats | null>(null);
+    const [rlTargetCoords, setRlTargetCoords] = useState<{ x: number, y: number } | null>(null);
 
     // ------------------------------------------------------------------
     // 1. Connection & Events
@@ -70,6 +85,19 @@ export const Playground: React.FC<PlaygroundProps> = ({ token, spaceId, onLogout
         // Receive Chat Messages
         newSocket.on('chat_message', (msg: Message) => {
             setMessages(prev => [...prev, msg]);
+        });
+
+        // Receive RL Stats
+        newSocket.on('rl_stats_update', (stats: RLStats) => {
+            setRlStats(stats);
+        });
+
+        newSocket.on('rl_target_set', (state: { col: number, row: number }) => {
+            setRlTargetCoords({
+                x: state.col * 50 + 25,
+                y: state.row * 50 + 25
+            });
+            setIsTargetMode(false); // Turn off target mode once confirmed
         });
 
         setSocket(newSocket);
@@ -129,20 +157,49 @@ export const Playground: React.FC<PlaygroundProps> = ({ token, spaceId, onLogout
                 ctx.stroke();
             }
 
-            // Draw Players
+            // Draw Players and Bots
             players.forEach(p => {
                 const isMe = me?.id === p.id;
-                ctx.fillStyle = isMe ? '#4f46e5' : '#10b981'; // Blue for me, Green for others
+                const isBot = p.id.startsWith("RL_BOT_");
+
+                if (isBot) {
+                    ctx.fillStyle = '#f59e0b'; // Amber target for AI
+                } else if (isMe) {
+                    ctx.fillStyle = '#4f46e5'; // Blue for me
+                } else {
+                    ctx.fillStyle = '#10b981'; // Green for others
+                }
 
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, 20, 0, Math.PI * 2);
                 ctx.fill();
 
-                ctx.fillStyle = 'white';
+                if (isBot) {
+                    // Draw little robot eyes just for fun
+                    ctx.fillStyle = 'black';
+                    ctx.beginPath(); ctx.arc(p.x - 7, p.y - 5, 3, 0, Math.PI * 2); ctx.fill();
+                    ctx.beginPath(); ctx.arc(p.x + 7, p.y - 5, 3, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = 'white';
+                } else {
+                    ctx.fillStyle = 'white';
+                }
+
                 ctx.font = '12px Arial';
                 ctx.textAlign = 'center';
                 ctx.fillText(p.username, p.x, p.y - 25);
             });
+
+            // Draw RL Target Flag if set
+            if (rlTargetCoords) {
+                ctx.fillStyle = 'rgba(239, 68, 68, 0.5)'; // Transparent red square
+                const col = Math.floor(rlTargetCoords.x / 50);
+                const row = Math.floor(rlTargetCoords.y / 50);
+                ctx.fillRect(col * 50, row * 50, 50, 50);
+
+                ctx.fillStyle = 'white';
+                ctx.font = '20px Arial';
+                ctx.fillText('🏁', rlTargetCoords.x, rlTargetCoords.y + 7);
+            }
 
             requestAnimationFrame(draw);
         };
@@ -191,10 +248,48 @@ export const Playground: React.FC<PlaygroundProps> = ({ token, spaceId, onLogout
         setNewMessage('');
     };
 
+    // ------------------------------------------------------------------
+    // 6. RL Handlers
+    // ------------------------------------------------------------------
+    const handleCanvasClick = (e: MouseEvent<HTMLCanvasElement>) => {
+        if (!isTargetMode || !socket || !canvasRef.current) return;
+
+        const rect = canvasRef.current.getBoundingClientRect();
+        // Calculate canvas coordinates
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        socket.emit("set_rl_target", { roomId: spaceId, targetX: x, targetY: y });
+    };
+
+    const spawnAgent = () => {
+        socket?.emit("spawn_rl_agent", { roomId: spaceId, startX: 50, startY: 50 });
+    };
+
+    const updateRlParams = (params: { epsilon?: number, learningRate?: number, discountFactor?: number }) => {
+        socket?.emit("update_rl_params", { roomId: spaceId, ...params });
+        // Optimistic UI update
+        if (rlStats) {
+            setRlStats({
+                ...rlStats,
+                ...params
+            });
+        }
+    };
+
     return (
-        <div className="flex h-screen bg-black overflow-hidden">
-            {/* LEFT: Game Area */}
-            <div className="flex-1 relative flex items-center justify-center bg-gray-900">
+        <div className="flex h-screen bg-black overflow-hidden relative">
+            {/* LEFT SIDEBAR: RL Controls */}
+            <RLControlPanel
+                stats={rlStats}
+                onSpawn={spawnAgent}
+                isTargetMode={isTargetMode}
+                onSetTargetMode={() => setIsTargetMode(!isTargetMode)}
+                onUpdateParams={updateRlParams}
+            />
+
+            {/* CENTER: Game Area */}
+            <div className={`flex-1 relative flex items-center justify-center bg-gray-900 ${isTargetMode ? 'cursor-crosshair' : ''}`}>
                 <button
                     onClick={onLogout}
                     className="absolute top-4 left-4 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-bold z-10"
@@ -206,7 +301,8 @@ export const Playground: React.FC<PlaygroundProps> = ({ token, spaceId, onLogout
                     ref={canvasRef}
                     width={800}
                     height={600}
-                    className="bg-black border border-gray-700 rounded-lg shadow-xl"
+                    onClick={handleCanvasClick}
+                    className={`bg-black border rounded-lg shadow-xl ${isTargetMode ? 'border-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.5)]' : 'border-gray-700'}`}
                 />
 
                 <div className="absolute bottom-4 left-4 text-gray-500 pointer-events-none">

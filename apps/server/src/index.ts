@@ -5,6 +5,8 @@ import cors from "cors";
 import { client } from "@repo/db";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { Environment, State } from "./rl/Environment";
+import { QAgent } from "./rl/QAgent";
 
 const app = express();
 
@@ -173,6 +175,28 @@ interface Player {
 // Global State: Room ID -> (Map of User ID -> Player Data)
 const rooms = new Map<string, Map<string, Player>>();
 
+// ----------------------------------------------------------------------
+// RL Global State
+// ----------------------------------------------------------------------
+const rlEnv = new Environment(800, 600, 50);
+const rlAgent = new QAgent(rlEnv);
+
+interface RLSession {
+    botId: string;
+    roomId: string;
+    currentState: State;
+    targetState: State | null;
+    isTraining: boolean;
+    episode: number;
+    steps: number;
+    totalReward: number;
+}
+// For simplicity, we assume one global bot or one bot per room. We'll support one bot per room.
+const roomRLSessions = new Map<string, RLSession>();
+
+// Bot's player ID prefix
+const BOT_ID_PREFIX = "RL_BOT_";
+
 io.on("connection", (socket) => {
     const user = socket.data.user;
     console.log("User connected:", user.username);
@@ -237,6 +261,69 @@ io.on("connection", (socket) => {
     });
 
     /**
+     * RL: SPAWN BOT
+     * Spawns an AI bot in the room.
+     */
+    socket.on("spawn_rl_agent", (data: { roomId: string, startX?: number, startY?: number }) => {
+        const { roomId, startX = 50, startY = 50 } = data;
+        const room = rooms.get(roomId);
+        if (!room) return;
+
+        const botId = BOT_ID_PREFIX + roomId;
+        const botState = rlEnv.getStateFromCoordinates(startX, startY);
+        const botCoords = rlEnv.getCoordinatesFromState(botState);
+
+        // Add Bot to Room as a "Player"
+        room.set(botId, {
+            id: botId,
+            username: "[AI] QBot",
+            x: botCoords.x,
+            y: botCoords.y
+        });
+
+        // Initialize RL Session
+        roomRLSessions.set(roomId, {
+            botId,
+            roomId,
+            currentState: botState,
+            targetState: null,
+            isTraining: false,
+            episode: 1,
+            steps: 0,
+            totalReward: 0
+        });
+
+        // Broadcast stats
+        io.to(roomId).emit("rl_stats_update", {
+            episode: 1, totalReward: 0,
+            epsilon: rlAgent.epsilon, learningRate: rlAgent.learningRate,
+            discountFactor: rlAgent.discountFactor
+        });
+    });
+
+    /**
+     * RL: SET TARGET AND START TRAINING
+     */
+    socket.on("set_rl_target", (data: { roomId: string, targetX: number, targetY: number }) => {
+        const session = roomRLSessions.get(data.roomId);
+        if (!session) return;
+
+        session.targetState = rlEnv.getStateFromCoordinates(data.targetX, data.targetY);
+        session.isTraining = true;
+
+        io.to(data.roomId).emit("rl_target_set", session.targetState);
+    });
+
+    /**
+     * RL: UPDATE HYPERPARAMS
+     */
+    socket.on("update_rl_params", (data: { roomId: string, epsilon?: number, learningRate?: number, discountFactor?: number }) => {
+        if (data.epsilon !== undefined) rlAgent.epsilon = data.epsilon;
+        if (data.learningRate !== undefined) rlAgent.learningRate = data.learningRate;
+        if (data.discountFactor !== undefined) rlAgent.discountFactor = data.discountFactor;
+    });
+
+    /**
      * DISCONNECT
      * Cleanup player data when they leave.
      */
@@ -255,9 +342,8 @@ io.on("connection", (socket) => {
 // ----------------------------------------------------------------------
 
 /**
- * TICK RATE: 50ms (20 updates per second)
- * Instead of broadcasting every move immediately, we batch updates.
- * The server sends the current state of all players in a room to everyone in that room.
+ * GAME LOOP TICK RATE: 50ms (20 updates per second)
+ * Server pushes states to clients.
  */
 setInterval(() => {
     rooms.forEach((players, roomId) => {
@@ -265,6 +351,55 @@ setInterval(() => {
         io.to(roomId).emit("players_update", playerList);
     });
 }, 50);
+
+/**
+ * RL TRAINING LOOP: 100ms (10 steps per second for visual observation)
+ * Fast enough to train, slow enough for users to watch.
+ */
+setInterval(() => {
+    roomRLSessions.forEach((session, roomId) => {
+        if (!session.isTraining || !session.targetState) return;
+
+        const room = rooms.get(roomId);
+        if (!room) return;
+        const bot = room.get(session.botId);
+        if (!bot) return;
+
+        const action = rlAgent.chooseAction(session.currentState);
+        const { nextState, reward, done } = rlEnv.step(session.currentState, action, session.targetState);
+
+        rlAgent.learn(session.currentState, action, reward, nextState);
+
+        // Update session
+        session.currentState = nextState;
+        session.totalReward += reward;
+        session.steps++;
+
+        // Sync Bot Coordinates
+        const coords = rlEnv.getCoordinatesFromState(nextState);
+        bot.x = coords.x;
+        bot.y = coords.y;
+
+        if (done || session.steps > 500) { // Timeout or Hit target
+            rlAgent.decayEpsilon();
+            io.to(roomId).emit("rl_stats_update", {
+                episode: session.episode,
+                totalReward: session.totalReward,
+                epsilon: rlAgent.epsilon,
+                learningRate: rlAgent.learningRate,
+                discountFactor: rlAgent.discountFactor
+            });
+
+            // Reset for next episode
+            session.episode++;
+            session.steps = 0;
+            session.totalReward = 0;
+            // Let the bot start from its current position (or spawn point, we'll use current for continuous tracking)
+            // Actually, usually we reset state, but let's keep it continuous or just reset to center
+            session.currentState = rlEnv.getStateFromCoordinates(50, 50); // Reset to origin
+        }
+    });
+}, 100);
 
 const PORT = 3002;
 httpServer.listen(PORT, () => {
